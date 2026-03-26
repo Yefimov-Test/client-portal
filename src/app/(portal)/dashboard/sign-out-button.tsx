@@ -10,6 +10,10 @@ export function SignOutButton() {
   async function handleSignOut() {
     const supabase = createBrowserClient();
     await supabase.auth.signOut();
+
+    // Also clear Telegram session cookie
+    document.cookie = "tg_session=; path=/; max-age=0";
+
     router.push("/login");
   }
 

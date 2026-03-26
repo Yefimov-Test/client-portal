@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { TelegramLoginButton } from "@/components/telegram-login";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -128,6 +129,8 @@ export default function LoginPage() {
           </svg>
           Continue with Google
         </Button>
+
+        <TelegramLoginButton />
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
