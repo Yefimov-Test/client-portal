@@ -1,72 +1,166 @@
 @AGENTS.md
 
-# CRM Project
+# Client Portal Project
 
-## Overview
+## О проекте
 
-Demo CRM system for a stream. Landing page for a fictional consulting company "Apex Strategy" is already built. The CRM dashboard needs to be built on stream.
+Стримовый проект. Клиентский портал для консалтинговой компании **"Apex Strategy"** (тот же бренд, что в CRM Project).
+
+**История для аудитории:** компания предлагает клиентам личный кабинет — с документами, статусом проекта, тарифом. Это реальный кейс для предпринимателей (агентство, консалтинг, коуч): закрытая зона для своих клиентов с авторизацией.
+
+**Цель стрима:** показать 4 метода аутентификации в Next.js + Supabase вживую.
 
 ## Stack
 
 - Next.js 16 (App Router, src/ dir)
-- Supabase (PostgreSQL + RLS)
+- Supabase (PostgreSQL + RLS) — `@supabase/ssr`
 - shadcn/ui + Tailwind CSS v4
-- OpenAI API (lead classification)
-- Telegram Bot API (notifications)
-- Vercel (deployment)
+- Vercel (деплой)
 
-## Project Structure
+## Структура маршрутов
 
-- `(marketing)/` - landing page (done)
-- `(crm)/dashboard/` - CRM kanban board (TODO)
-- `api/leads/` - webhook endpoint (stub, needs Supabase + AI + Telegram)
-- `components/marketing/` - landing components
-- `components/crm/` - CRM components (TODO)
-- `types/index.ts` - Lead, LeadFormData types
+- `(marketing)/` — лендинг Apex Strategy (лендинг из CRM Project, добавить кнопку "Личный кабинет")
+- `(portal)/login/` — страница с 4 способами входа
+- `(portal)/dashboard/` — защищённый клиентский кабинет
+- `api/auth/callback/` — Supabase OAuth callback (Google, GitHub)
+- `api/auth/telegram/` — Telegram Login Widget handler
 
-## What Needs to Be Built (Stream)
+## Что показывает дашборд после входа
 
-### 1. Supabase Setup
-- Create `leads` table matching the `Lead` type in `types/index.ts`
-- Enable RLS
-- Connect to `api/leads/route.ts`
+- Имя пользователя
+- Каким методом вошёл
+- Тариф клиента
+- Список документов (заглушки или реальные — по ходу стрима)
 
-### 2. CRM Dashboard (`(crm)/dashboard/`)
-- Kanban board with columns: New, Contacted, Qualified, Proposal, Closed Won, Closed Lost
-- Drag & drop cards between columns
-- Each card shows: name, email, topic, priority badge, time since created
-- Click card to see full details
+## Supabase
 
-### 3. AI Classification
-- When a new lead comes in via `/api/leads`, call OpenAI to classify priority (hot/warm/cold)
-- Based on message content and topic
-- Save priority to Supabase
+- Проект: `zdshojzpbcgzekubsvbi` (eu-north-1)
+- Schema: **public** (не отдельная схема)
+- Все таблицы с префиксом `portal_`
+- MCP инструменты: `mcp__plugin_supabase_supabase__*`
 
-### 4. Telegram Notifications
-- When a new lead comes in, send a Telegram message
-- Format: name, email, topic, priority, message preview
+### Таблица `portal_profiles`
 
-### 5. Deploy
-- `vercel deploy --prod`
+```sql
+create table portal_profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  display_name text,
+  avatar_url text,
+  auth_method text, -- 'password' | 'google' | 'github' | 'telegram'
+  telegram_id bigint unique,
+  telegram_username text,
+  role text default 'client', -- 'client' | 'admin'
+  plan text default 'basic',  -- 'basic' | 'pro' | 'enterprise'
+  created_at timestamptz default now()
+);
+-- RLS включён: каждый видит только свою строку (auth.uid() = id)
+```
 
-## Integrations (MCP Plugins)
+## 4 метода аутентификации
 
-All integrations are connected via MCP plugins. Do NOT hardcode credentials or use env vars for these:
+### 1. Email/Password
 
-- **Supabase**: use `mcp__plugin_supabase_supabase__*` tools. Project: `zdshojzpbcgzekubsvbi` (eu-north-1). **All tables must be created in schema `crm_demo`** (not public).
-- **Vercel**: use `mcp__plugin_vercel_vercel__*` tools. Team: `team_6c3b4199VB4COoMFq9wZuU8X`, Project: `crm-demo` (`prj_nqfvnSt25dzOmqu9LNWlRuUdzvUJ`).
-- **n8n**: use `n8nac` CLI (`npx n8nac list/pull/push`). Workflow: `CRM Demo Project` (`EVWxhQU8oExU8UA7`).
+- `supabase.auth.signInWithPassword({ email, password })`
+- `supabase.auth.signUp({ email, password })`
+- Ключевой момент на стриме: `getUser()` vs `getSession()` — на сервере всегда `getUser()`, потому что JWT верифицируется с Supabase, а не берётся из куки
 
-## Environment Variables (.env)
+### 2. Google OAuth
 
-Only variables that are NOT managed by MCP plugins:
+- `supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: '/auth/callback' } })`
+- Callback роут: `supabase.auth.exchangeCodeForSession(code)`
+- Один `/auth/callback` работает для Google и GitHub
 
-- `TELEGRAM_BOT_TOKEN` - Telegram bot token for notifications
-- `TELEGRAM_CHAT_ID` - Chat ID to send notifications to
-- `OPENAI_API_KEY` - OpenAI API key for lead classification (TODO: add on stream)
+### 3. GitHub OAuth
 
-## Design
+- Тот же флоу, что Google — показываем единообразие Supabase OAuth
+- Ключевой момент: один callback роут на все OAuth провайдеры
 
-- Dark mode by default
-- Warm stone/amber palette (oklch)
-- Geist Sans typography
+### 4. Telegram Login Widget
+
+- HTML виджет от Telegram (`<script data-telegram-login="...">`)
+- POST `/api/auth/telegram/` — верификация HMAC-SHA256
+
+**Верификация Telegram:**
+```typescript
+// secretKey = SHA256(botToken) — не HMAC, а именно хэш
+const secretKey = crypto.createHash('sha256').update(botToken).digest()
+
+// checkString = отсортированные key=value через \n (без поля hash)
+const checkString = Object.entries(fields)
+  .sort(([a], [b]) => a.localeCompare(b))
+  .map(([k, v]) => `${k}=${v}`)
+  .join('\n')
+
+const expectedHash = crypto.createHmac('sha256', secretKey).update(checkString).digest('hex')
+
+// Также проверить: auth_date не старше 24 часов
+if (now - data.auth_date > 86400) return false
+```
+
+**КРИТИЧЕСКИЙ НЮАНС — роли при upsert:**
+```typescript
+// ПРАВИЛЬНО: сначала проверить существующую роль в БД
+const { data: existing } = await supabase
+  .from('portal_profiles')
+  .select('role')
+  .eq('telegram_id', body.id)
+  .single()
+
+// Не понижать вручную повышенные роли
+const role = existing?.role === 'admin' ? 'admin' : 'client'
+
+// НЕПРАВИЛЬНО (часто делают так):
+// const role = 'client' // ← сотрёт ручное повышение при каждом входе!
+```
+
+Почему это важно: после upsert при каждом входе роль перезаписывается. Если ты вручную поставил кому-то `admin` в БД, следующий вход через Telegram вернёт `client`. Нужно всегда проверять текущее значение перед записью.
+
+**Сессия Telegram:** custom cookie (base64 JSON + HMAC подпись через `SESSION_SECRET`), НЕ Supabase native session. У Telegram нет Supabase JWT.
+
+## Middleware
+
+`src/middleware.ts` — защита `(portal)/dashboard/`:
+- Supabase-методы: `supabase.auth.getUser()`
+- Telegram: проверка кастомной куки
+- Редирект на `/login` если не авторизован
+
+## Environment Variables
+
+```
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+TELEGRAM_BOT_TOKEN=
+SESSION_SECRET=
+```
+
+## Дизайн
+
+- Тёмная тема по умолчанию
+- Warm stone/amber палитра (oklch) — те же токены что в CRM Project
+- Geist Sans типографика
+- shadcn/ui компоненты
+
+## Деплой и репозиторий (обновлено 2026-03-26)
+
+- **GitHub:** https://github.com/Yefimov-Test/client-portal
+- **Vercel:** проект `client-portal`, team `testhookah2-7820s-projects`
+- **Live URL:** https://client-portal-amber-nu.vercel.app
+- **Git integration:** включена — push в master = автодеплой
+- **Vercel project ID:** создан с нуля (не crm-demo), `.vercel/project.json` обновлён
+
+## Статус на старте стрима (2026-03-26)
+
+Что уже есть:
+- Репо создано как копия CRM Project, очищено от CRM-роутов (`(crm)/`, `api/leads/`)
+- Осталось: `(marketing)/` — лендинг Apex Strategy + структура Next.js 16
+- Задеплоено на Vercel, билд зелёный
+
+Что ещё НЕ сделано (делать на стриме):
+- Таблица `portal_profiles` в Supabase (schema: public, префикс `portal_`)
+- Маршруты `(portal)/login/` и `(portal)/dashboard/`
+- Middleware защита дашборда
+- 4 метода аутентификации
+- Добавить кнопку "Личный кабинет" на лендинг `(marketing)/`
+- Env variables на Vercel (Supabase + Telegram + SESSION_SECRET)

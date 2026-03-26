@@ -1,18 +1,9 @@
-import { createClient } from "@supabase/supabase-js";
+import { createBrowserClient as createBrowser } from "@supabase/ssr";
 
+// Browser client (Client Components) — singleton, automatic cookie handling
 export function createBrowserClient() {
-  return createClient(
+  return createBrowser(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { db: { schema: "crm_demo" } }
-  );
-}
-
-// Server-side client (API routes) — uses same anon key with RLS
-export function createServerSupabaseClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { db: { schema: "crm_demo" } }
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 }
