@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 
 function getSupabaseAdmin() {

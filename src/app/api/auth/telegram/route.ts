@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
+export const dynamic = "force-dynamic";
+
 const SESSION_SECRET = process.env.SESSION_SECRET!;
 const BOT_USERNAME = "stream_client_portal_bot";
 
@@ -49,7 +51,9 @@ export async function GET(request: NextRequest) {
     .single();
 
   if (!authRow || !authRow.confirmed) {
-    return NextResponse.json({ confirmed: false });
+    const notYet = NextResponse.json({ confirmed: false });
+    notYet.headers.set("Cache-Control", "no-store");
+    return notYet;
   }
 
   // Confirmed — create/update profile and set cookie
@@ -97,6 +101,7 @@ export async function GET(request: NextRequest) {
   });
 
   const response = NextResponse.json({ confirmed: true });
+  response.headers.set("Cache-Control", "no-store");
   response.cookies.set("tg_session", sessionValue, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
