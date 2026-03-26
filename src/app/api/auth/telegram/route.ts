@@ -2,33 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const SESSION_SECRET = process.env.SESSION_SECRET!;
-
-function verifyTelegramData(data: Record<string, string>): boolean {
-  const { hash, ...fields } = data;
-  if (!hash) return false;
-
-  // Check auth_date is not older than 24 hours
-  const authDate = parseInt(fields.auth_date, 10);
-  if (Date.now() / 1000 - authDate > 86400) return false;
-
-  // secretKey = SHA256(botToken)
-  const secretKey = crypto.createHash("sha256").update(BOT_TOKEN).digest();
-
-  // checkString = sorted key=value pairs joined by \n
-  const checkString = Object.entries(fields)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${v}`)
-    .join("\n");
-
-  const expectedHash = crypto
-    .createHmac("sha256", secretKey)
-    .update(checkString)
-    .digest("hex");
-
-  return expectedHash === hash;
-}
+const BOT_USERNAME = "stream_client_portal_bot";
 
 function createSessionCookie(payload: Record<string, unknown>): string {
   const data = Buffer.from(JSON.stringify(payload)).toString("base64");
@@ -39,79 +14,95 @@ function createSessionCookie(payload: Record<string, unknown>): string {
   return `${data}.${signature}`;
 }
 
-export async function POST(request: NextRequest) {
-  const body = await request.json();
-
-  // Verify Telegram data
-  const stringFields: Record<string, string> = {};
-  for (const [key, value] of Object.entries(body)) {
-    stringFields[key] = String(value);
-  }
-
-  if (!verifyTelegramData(stringFields)) {
-    return NextResponse.json(
-      { error: "Invalid Telegram data" },
-      { status: 401 }
-    );
-  }
-
-  // Supabase admin client (bypasses RLS)
-  const supabase = createClient(
+function getSupabaseAdmin() {
+  return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
+}
 
-  // Check existing profile to preserve role
+// POST /api/auth/telegram — generate auth token and return deep link
+export async function POST() {
+  const token = crypto.randomBytes(32).toString("hex");
+  const supabase = getSupabaseAdmin();
+
+  await supabase.from("portal_telegram_auth").insert({ token });
+
+  const deepLink = `https://t.me/${BOT_USERNAME}?start=${token}`;
+
+  return NextResponse.json({ token, deepLink });
+}
+
+// GET /api/auth/telegram?token=xxx — poll to check if confirmed
+export async function GET(request: NextRequest) {
+  const token = request.nextUrl.searchParams.get("token");
+  if (!token) {
+    return NextResponse.json({ error: "Missing token" }, { status: 400 });
+  }
+
+  const supabase = getSupabaseAdmin();
+
+  const { data: authRow } = await supabase
+    .from("portal_telegram_auth")
+    .select("*")
+    .eq("token", token)
+    .single();
+
+  if (!authRow || !authRow.confirmed) {
+    return NextResponse.json({ confirmed: false });
+  }
+
+  // Confirmed — create/update profile and set cookie
   const { data: existing } = await supabase
     .from("portal_profiles")
     .select("role")
-    .eq("telegram_id", body.id)
+    .eq("telegram_id", authRow.telegram_id)
     .single();
 
   const role = existing?.role === "admin" ? "admin" : "client";
 
   const displayName =
-    [body.first_name, body.last_name].filter(Boolean).join(" ") ||
-    body.username ||
-    `tg_${body.id}`;
+    [authRow.first_name, authRow.last_name].filter(Boolean).join(" ") ||
+    authRow.telegram_username ||
+    `tg_${authRow.telegram_id}`;
 
-  // Upsert profile
   await supabase.from("portal_profiles").upsert(
     {
       id: crypto.randomUUID(),
-      telegram_id: body.id,
-      telegram_username: body.username || null,
+      telegram_id: authRow.telegram_id,
+      telegram_username: authRow.telegram_username || null,
       display_name: displayName,
-      avatar_url: body.photo_url || null,
       auth_method: "telegram",
       role,
     },
     { onConflict: "telegram_id" }
   );
 
-  // Get the profile we just upserted
   const { data: profile } = await supabase
     .from("portal_profiles")
     .select("id, display_name, role, plan")
-    .eq("telegram_id", body.id)
+    .eq("telegram_id", authRow.telegram_id)
     .single();
 
-  // Create custom session cookie
+  // Clean up used token
+  await supabase.from("portal_telegram_auth").delete().eq("token", token);
+
+  // Set session cookie
   const sessionValue = createSessionCookie({
     id: profile!.id,
-    telegram_id: body.id,
+    telegram_id: authRow.telegram_id,
     display_name: profile!.display_name,
     role: profile!.role,
     plan: profile!.plan,
   });
 
-  const response = NextResponse.json({ success: true });
+  const response = NextResponse.json({ confirmed: true });
   response.cookies.set("tg_session", sessionValue, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 7, // 7 days
+    maxAge: 60 * 60 * 24 * 7,
   });
 
   return response;
